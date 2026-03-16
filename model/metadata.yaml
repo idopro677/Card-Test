@@ -1,0 +1,72 @@
+description: Ultralytics best model trained on /content/Playing-Cards-2/data.yaml
+author: Ultralytics
+date: '2026-03-16T23:27:04.035273'
+version: 8.4.22
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: 10D
+  1: 10H
+  2: 10S
+  3: 10T
+  4: 2D
+  5: 2H
+  6: 2S
+  7: 2T
+  8: 3D
+  9: 3H
+  10: 3S
+  11: 3T
+  12: 4D
+  13: 4H
+  14: 4S
+  15: 4T
+  16: 5D
+  17: 5H
+  18: 5S
+  19: 5T
+  20: 6D
+  21: 6H
+  22: 6S
+  23: 6T
+  24: 7D
+  25: 7H
+  26: 7S
+  27: 7T
+  28: 8D
+  29: 8H
+  30: 8S
+  31: 8T
+  32: 9D
+  33: 9H
+  34: 9S
+  35: 9T
+  36: AD
+  37: AH
+  38: AS
+  39: AT
+  40: JD
+  41: JH
+  42: JS
+  43: JT
+  44: KD
+  45: KH
+  46: KS
+  47: KT
+  48: QD
+  49: QH
+  50: QS
+  51: QT
+args:
+  batch: 1
+  half: false
+  int8: false
+  nms: false
+channels: 3
+end2end: false
