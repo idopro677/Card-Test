@@ -295,11 +295,14 @@ input[type=file]{display:none}
 
 /* ── MEDIA CARD ── */
 .media-card{
-  background:rgba(0,0,0,0.5);border-radius:20px;overflow:hidden;position:relative;
-  min-height:240px;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.5);border-radius:20px;overflow:hidden;
+  /* Use block layout, not flex, so video/img stack naturally and canvas can overlay them */
+  display:block;position:relative;
   box-shadow:0 16px 56px rgba(0,0,0,0.6),inset 0 1px 0 rgba(255,255,255,0.05);
   margin-bottom:18px;border:1px solid rgba(201,168,76,0.2);
-  transition:border-color .3s;backdrop-filter:blur(4px);
+  transition:border-color .3s;
+  /* min-height only shown when empty (placeholder visible) */
+  min-height:240px;
 }
 .media-card:hover{border-color:rgba(201,168,76,0.4)}
 .scan-line{
@@ -309,7 +312,11 @@ input[type=file]{display:none}
 }
 @keyframes scanL{0%{top:0}100%{top:calc(100% - 2px)}}
 .media-card.scanning .scan-line{display:block}
-.ph{text-align:center;padding:48px 20px;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px}
+.ph{
+  text-align:center;padding:48px 20px;z-index:1;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+  /* when media-card has no video/image, ph is the only content, fills naturally */
+}
 .ph-circle{
   width:90px;height:90px;border-radius:50%;
   background:rgba(0,0,0,0.4);
@@ -321,11 +328,20 @@ input[type=file]{display:none}
 @keyframes spinFloat{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-13px) rotate(4deg)}}
 .ph h3{font-family:'Playfair Display',serif;font-size:clamp(16px,5vw,20px);color:var(--gold)}
 .ph p{font-size:clamp(12px,3.5vw,13px);color:var(--text-muted);max-width:230px;line-height:1.6}
+/* video and images fill width, height is natural (preserves aspect ratio) */
 video,.freeze-img,#img-el{
-  width:100%;display:none;border-radius:19px;
-  position:relative;z-index:1;object-fit:cover;
+  display:none;width:100%;height:auto;
+  border-radius:19px;
+  position:relative;z-index:1;
+  vertical-align:top; /* removes inline gap */
 }
-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;border-radius:19px}
+/* canvas sits absolute over the media, matching its exact rendered size via JS */
+canvas{
+  position:absolute;top:0;left:0;
+  width:100%;height:100%; /* default: cover full media-card; liveLoop overrides per-frame */
+  pointer-events:none;z-index:2;
+  border-radius:19px;
+}
 
 /* ── HISTORY ── */
 .hist-section{display:none;margin-bottom:18px}
@@ -423,8 +439,25 @@ canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-in
   background:rgba(0,0,0,0.35);transition:all .15s;
   color:var(--text-light);
 }
-.pick-card:hover{border-color:var(--gold);background:rgba(201,168,76,0.12);transform:scale(1.06)}
-.pick-card:disabled{opacity:0.25;cursor:not-allowed;transform:none}
+.pick-card:hover:not(.selected){border-color:var(--gold);background:rgba(201,168,76,0.12);transform:scale(1.06)}
+/* .selected = card already in play — click again to remove */
+.pick-card.selected{
+  background:rgba(192,57,43,0.22);
+  border-color:rgba(192,57,43,0.6);
+  box-shadow:inset 0 0 0 1px rgba(192,57,43,0.3);
+  position:relative;
+}
+.pick-card.selected::after{
+  content:'✕';
+  position:absolute;top:-5px;right:-5px;
+  width:14px;height:14px;border-radius:50%;
+  background:var(--red-bright);color:#fff;
+  font-size:8px;line-height:14px;text-align:center;
+  box-shadow:0 1px 4px rgba(0,0,0,0.4);
+}
+.pick-card.selected:hover{background:rgba(192,57,43,0.38);transform:scale(1.05)}
+/* unavailable = used in other hand (not current picker's target) — greyed, truly unclickable */
+.pick-card.unavailable{opacity:0.18;cursor:not-allowed;pointer-events:none}
 .pick-card.suit-S{color:#8888ee}.pick-card.suit-H{color:#e07070}.pick-card.suit-D{color:#6699ee}.pick-card.suit-T{color:#70d070}
 
 /* ── SHOE BAR ── */
@@ -1307,13 +1340,24 @@ function renderHistory(mode){
 ════════════════════════════════════════════════ */
 async function liveLoop(){
   if(!model||!isRunning)return;
-  liveCanvas.width=video.clientWidth||640;
-  liveCanvas.height=video.clientHeight||480;
+  const vw=video.videoWidth||640;
+  const vh=video.videoHeight||480;
+  // Set canvas pixel buffer to video source resolution
+  liveCanvas.width=vw;
+  liveCanvas.height=vh;
+  // Set canvas CSS size to match the video's rendered size exactly
+  // getBoundingClientRect is scroll-position independent
+  const rect=video.getBoundingClientRect();
+  const mediaRect=document.getElementById('live-media').getBoundingClientRect();
+  liveCanvas.style.width=rect.width+'px';
+  liveCanvas.style.height=rect.height+'px';
+  liveCanvas.style.top=(rect.top-mediaRect.top)+'px';
+  liveCanvas.style.left=(rect.left-mediaRect.left)+'px';
   document.getElementById('live-media').classList.add('scanning');
   const{boxes,scores,classIds,sel}=await runInference(video,liveConf);
-  lc.clearRect(0,0,liveCanvas.width,liveCanvas.height);
+  lc.clearRect(0,0,vw,vh);
   if(sel.length){
-    const detected=drawBoxes(lc,sel,boxes,scores,classIds,liveCanvas.width,liveCanvas.height,liveLabels,liveConfPct);
+    const detected=drawBoxes(lc,sel,boxes,scores,classIds,vw,vh,liveLabels,liveConfPct);
     liveCards=detected.length;
   }else{liveCards=0}
   frameCount++;
@@ -1365,14 +1409,22 @@ function doFreeze(){
     freezeImg.src=imgSrc;freezeImg.style.display='block';
     document.getElementById('live-ph').style.display='none';
     freezeImg.onload=async()=>{
-      liveCanvas.width=freezeImg.clientWidth||off.width;
-      liveCanvas.height=freezeImg.clientHeight||off.height;
+      await new Promise(r=>requestAnimationFrame(r));
+      const fw=freezeImg.naturalWidth||off.width;
+      const fh=freezeImg.naturalHeight||off.height;
+      liveCanvas.width=fw;
+      liveCanvas.height=fh;
+      // Reset any inline style from liveLoop so canvas fills the frozen image
+      liveCanvas.style.width='100%';
+      liveCanvas.style.height='100%';
+      liveCanvas.style.top='0';
+      liveCanvas.style.left='0';
       playSound('scan');
       document.getElementById('live-media').classList.add('scanning');
       const{boxes,scores,classIds,sel}=await runInference(freezeImg,liveConf);
       document.getElementById('live-media').classList.remove('scanning');
       lc.clearRect(0,0,liveCanvas.width,liveCanvas.height);
-      const detected=sel.length?drawBoxes(lc,sel,boxes,scores,classIds,liveCanvas.width,liveCanvas.height,liveLabels,liveConfPct):[];
+      const detected=sel.length?drawBoxes(lc,sel,boxes,scores,classIds,fw,fh,liveLabels,liveConfPct):[];
       showResults(detected,imgSrc,'live');
     };
     showToast('📸 Frozen — analyzing…');
@@ -1425,14 +1477,17 @@ document.getElementById('upload-input').addEventListener('change',async e=>{
     document.getElementById('photo-ph').style.display='none';
     document.getElementById('photo-results').style.display='none';
     imgEl.onload=async()=>{
-      photoCanvas.width=imgEl.clientWidth||imgEl.naturalWidth;
-      photoCanvas.height=imgEl.clientHeight||imgEl.naturalHeight;
+      await new Promise(r=>requestAnimationFrame(r));
+      const nw=imgEl.naturalWidth||imgEl.clientWidth;
+      const nh=imgEl.naturalHeight||imgEl.clientHeight;
+      photoCanvas.width=nw;
+      photoCanvas.height=nh;
       pc.clearRect(0,0,photoCanvas.width,photoCanvas.height);
       document.getElementById('photo-media').classList.add('scanning');
       playSound('scan');
       const{boxes,scores,classIds,sel}=await runInference(imgEl,photoConf);
       document.getElementById('photo-media').classList.remove('scanning');
-      const detected=sel.length?drawBoxes(pc,sel,boxes,scores,classIds,photoCanvas.width,photoCanvas.height,photoLabels,photoConfPct):[];
+      const detected=sel.length?drawBoxes(pc,sel,boxes,scores,classIds,nw,nh,photoLabels,photoConfPct):[];
       showResults(detected,ev.target.result,'photo');
     };
   };
@@ -1660,7 +1715,7 @@ function basicStrategy(playerCards, dealerUpCard, surrenderAllowed){
 }
 
 /* ── Build card picker ── */
-function buildCardPicker(containerId, onPick){
+function buildCardPicker(containerId, onPick, onRemove){
   const c=document.getElementById(containerId);
   c.innerHTML='';
   ALL_RANKS.forEach(rank=>{
@@ -1671,7 +1726,13 @@ function buildCardPicker(containerId, onPick){
       btn.className=`pick-card suit-${suit}`;
       btn.textContent=`${info.emoji}${rank}`;
       btn.dataset.label=label;
-      btn.addEventListener('click',()=>onPick(label,btn));
+      btn.addEventListener('click',()=>{
+        if(btn.classList.contains('selected')){
+          if(onRemove) onRemove(label);
+        } else if(!btn.classList.contains('unavailable')){
+          onPick(label);
+        }
+      });
       c.appendChild(btn);
     });
   });
@@ -1700,14 +1761,7 @@ function renderBJHand(which){
     chip.innerHTML=`<span style="color:${info.color}">${info.emoji}</span>${rank}<span class="rm" data-idx="${i}" data-which="${which}">✕</span>`;
     chip.querySelector('.rm').addEventListener('click',e=>{
       e.stopPropagation();
-      const idx=parseInt(e.target.dataset.idx);
-      const w=e.target.dataset.which;
-      const arr=w==='player'?bj.playerCards:bj.dealerCards;
-      // restore count for removed card
-      bj.runningCount -= hiLoValue(getRank(arr[idx]));
-      bj.cardsSeenTotal--;
-      arr.splice(idx,1);
-      renderBJHand(w);updateBJPickers();updateBJCount();
+      bjRemoveCard(which, c);
     });
     list.appendChild(chip);
   });
@@ -1716,13 +1770,20 @@ function renderBJHand(which){
   valEl.innerHTML=cards.length?`${total}<small>${soft?' (soft)':''} pts</small>`:`<span style="color:var(--text-muted)">—</span>`;
 }
 
-/* ── Update BJ pickers (disable used) ── */
+/* ── Update BJ pickers (mark selected/unavailable per picker) ── */
 function updateBJPickers(){
-  const used=bjUsedCards();
-  ['bj-picker-player','bj-picker-dealer'].forEach(id=>{
-    document.querySelectorAll(`#${id} .pick-card`).forEach(btn=>{
-      btn.disabled=used.includes(btn.dataset.label);
-    });
+  // player picker: selected = playerCards, unavailable = dealerCards
+  updatePickerState('bj-picker-player', bj.playerCards, bj.dealerCards);
+  // dealer picker: selected = dealerCards, unavailable = playerCards
+  updatePickerState('bj-picker-dealer', bj.dealerCards, bj.playerCards);
+}
+
+function updatePickerState(pickerId, ownCards, otherCards){
+  document.querySelectorAll(`#${pickerId} .pick-card`).forEach(btn=>{
+    const lbl=btn.dataset.label;
+    btn.classList.remove('selected','unavailable');
+    if(ownCards.includes(lbl)) btn.classList.add('selected');
+    else if(otherCards.includes(lbl)) btn.classList.add('unavailable');
   });
 }
 
@@ -1818,11 +1879,21 @@ async function bjScanCamera(which){
   const panel=document.getElementById('bj-cam-panel');
   const label=document.getElementById('bj-cam-label');
   label.textContent=`📷 Scan ${which==='player'?'Your':'Dealer'} Cards`;
+  // Stop any running stream first
+  if(bj.bjStream){bj.bjStream.getTracks().forEach(t=>t.stop());bj.bjStream=null;}
+  // Clear old image + canvas
+  const vid=document.getElementById('bj-video');
+  const fi=document.getElementById('bj-freeze-img');
+  const cnv=document.getElementById('bj-canvas');
+  const ctx=cnv.getContext('2d');
+  vid.style.display='none';vid.srcObject=null;
+  fi.style.display='none';fi.src='';
+  ctx.clearRect(0,0,cnv.width,cnv.height);
+  document.getElementById('bj-cam-ph').style.display='flex';
+  document.getElementById('bj-cam-start').style.display='inline-flex';
+  document.getElementById('bj-cam-freeze').style.display='none';
   panel.style.display='block';
   panel.scrollIntoView({behavior:'smooth',block:'nearest'});
-  const startBtn=document.getElementById('bj-cam-start');
-  const freezeBtn=document.getElementById('bj-cam-freeze');
-  startBtn.style.display='inline-flex';freezeBtn.style.display='none';
 }
 
 document.getElementById('bj-cam-player').addEventListener('click',()=>bjScanCamera('player'));
@@ -1848,17 +1919,22 @@ document.getElementById('bj-cam-freeze').addEventListener('click',async()=>{
   const off=document.createElement('canvas');
   off.width=vid.videoWidth||640;off.height=vid.videoHeight||480;
   off.getContext('2d').drawImage(vid,0,0);
-  if(bj.bjStream)bj.bjStream.getTracks().forEach(t=>t.stop());
-  vid.style.display='none';
+  if(bj.bjStream){bj.bjStream.getTracks().forEach(t=>t.stop());bj.bjStream=null;}
+  vid.style.display='none';vid.srcObject=null;
+  // Clear old canvas immediately
+  ctx.clearRect(0,0,cnv.width,cnv.height);
   fi.src=off.toDataURL('image/jpeg',.87);fi.style.display='block';
   fi.onload=async()=>{
-    cnv.width=fi.clientWidth;cnv.height=fi.clientHeight;
+    await new Promise(r=>requestAnimationFrame(r));
+    const nw=fi.naturalWidth||fi.clientWidth||off.width;
+    const nh=fi.naturalHeight||fi.clientHeight||off.height;
+    cnv.width=nw;cnv.height=nh;
+    ctx.clearRect(0,0,nw,nh);
     document.getElementById('bj-media-card').classList.add('scanning');
     const{boxes,scores,classIds,sel}=await runInference(fi,0.4);
     document.getElementById('bj-media-card').classList.remove('scanning');
-    ctx.clearRect(0,0,cnv.width,cnv.height);
     if(sel.length){
-      const detected=drawBoxes(ctx,sel,boxes,scores,classIds,cnv.width,cnv.height,true,true);
+      const detected=drawBoxes(ctx,sel,boxes,scores,classIds,nw,nh,true,true);
       detected.forEach(lbl=>bjAddCard(bj.activeScanTarget,lbl));
       showToast(`📸 Found: ${detected.join(', ')}`);
     }else{showToast('No cards detected — try manually');}
@@ -1877,9 +1953,26 @@ document.getElementById('bj-cam-close').addEventListener('click',()=>{
   document.getElementById('bj-cam-freeze').style.display='none';
 });
 
+/* ── Remove card from BJ hand ── */
+function bjRemoveCard(which, label){
+  const arr=which==='player'?bj.playerCards:bj.dealerCards;
+  const idx=arr.indexOf(label);
+  if(idx===-1)return;
+  bj.runningCount-=hiLoValue(getRank(label));
+  bj.cardsSeenTotal--;
+  arr.splice(idx,1);
+  renderBJHand(which);updateBJPickers();updateBJCount();
+}
+
 /* ── Init BJ pickers ── */
-buildCardPicker('bj-picker-player', (label)=>bjAddCard('player',label));
-buildCardPicker('bj-picker-dealer', (label)=>bjAddCard('dealer',label));
+buildCardPicker('bj-picker-player',
+  (label)=>bjAddCard('player',label),
+  (label)=>bjRemoveCard('player',label)
+);
+buildCardPicker('bj-picker-dealer',
+  (label)=>bjAddCard('dealer',label),
+  (label)=>bjRemoveCard('dealer',label)
+);
 updateBJCount();
 
 /* ════════════════════════════════════════════════════════════════════
@@ -2195,12 +2288,13 @@ function pkUsedCards(){
 }
 
 function updatePKPickers(){
-  const used=pkUsedCards();
-  ['pk-picker-hole','pk-picker-community','pk-picker-burn'].forEach(id=>{
-    document.querySelectorAll(`#${id} .pick-card`).forEach(btn=>{
-      btn.disabled=used.includes(btn.dataset.label);
-    });
-  });
+  const allUsed=pkUsedCards();
+  // hole picker: selected = holeCards, unavailable = rest
+  updatePickerState('pk-picker-hole', pk.holeCards, [...pk.communityCards,...pk.burnCards]);
+  // community picker: selected = communityCards, unavailable = rest
+  updatePickerState('pk-picker-community', pk.communityCards, [...pk.holeCards,...pk.burnCards]);
+  // burn picker: selected = burnCards, unavailable = rest
+  updatePickerState('pk-picker-burn', pk.burnCards, [...pk.holeCards,...pk.communityCards]);
 }
 
 function pkAddCard(which, label){
@@ -2213,9 +2307,26 @@ function pkAddCard(which, label){
   renderPKCards(which);updatePKPickers();
 }
 
-buildCardPicker('pk-picker-hole', (label)=>pkAddCard('hole',label));
-buildCardPicker('pk-picker-community', (label)=>pkAddCard('community',label));
-buildCardPicker('pk-picker-burn', (label)=>pkAddCard('burn',label));
+function pkRemoveCard(which, label){
+  const arr=which==='hole'?pk.holeCards:which==='community'?pk.communityCards:pk.burnCards;
+  const idx=arr.indexOf(label);
+  if(idx===-1)return;
+  arr.splice(idx,1);
+  renderPKCards(which);updatePKPickers();
+}
+
+buildCardPicker('pk-picker-hole',
+  (label)=>pkAddCard('hole',label),
+  (label)=>pkRemoveCard('hole',label)
+);
+buildCardPicker('pk-picker-community',
+  (label)=>pkAddCard('community',label),
+  (label)=>pkRemoveCard('community',label)
+);
+buildCardPicker('pk-picker-burn',
+  (label)=>pkAddCard('burn',label),
+  (label)=>pkRemoveCard('burn',label)
+);
 
 /* ── Stage management ── */
 function setPokerStage(stage){
@@ -2258,6 +2369,19 @@ async function pkScanCamera(which){
   const panel=document.getElementById('pk-cam-panel');
   const label=document.getElementById('pk-cam-label');
   label.textContent=`📷 Scan ${which==='hole'?'Hole':which==='community'?'Community':'Burn'} Cards`;
+  // Stop any running stream first
+  if(pk.pkStream){pk.pkStream.getTracks().forEach(t=>t.stop());pk.pkStream=null;}
+  // Clear old image + canvas
+  const vid=document.getElementById('pk-video');
+  const fi=document.getElementById('pk-freeze-img');
+  const cnv=document.getElementById('pk-canvas');
+  const ctx=cnv.getContext('2d');
+  vid.style.display='none';vid.srcObject=null;
+  fi.style.display='none';fi.src='';
+  ctx.clearRect(0,0,cnv.width,cnv.height);
+  document.getElementById('pk-cam-ph').style.display='flex';
+  document.getElementById('pk-cam-start').style.display='inline-flex';
+  document.getElementById('pk-cam-freeze').style.display='none';
   panel.style.display='block';
   panel.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
@@ -2285,17 +2409,22 @@ document.getElementById('pk-cam-freeze').addEventListener('click',async()=>{
   const off=document.createElement('canvas');
   off.width=vid.videoWidth||640;off.height=vid.videoHeight||480;
   off.getContext('2d').drawImage(vid,0,0);
-  if(pk.pkStream)pk.pkStream.getTracks().forEach(t=>t.stop());
-  vid.style.display='none';
+  if(pk.pkStream){pk.pkStream.getTracks().forEach(t=>t.stop());pk.pkStream=null;}
+  vid.style.display='none';vid.srcObject=null;
+  // Clear old canvas immediately
+  ctx.clearRect(0,0,cnv.width,cnv.height);
   fi.src=off.toDataURL('image/jpeg',.87);fi.style.display='block';
   fi.onload=async()=>{
-    cnv.width=fi.clientWidth;cnv.height=fi.clientHeight;
+    await new Promise(r=>requestAnimationFrame(r));
+    const nw=fi.naturalWidth||fi.clientWidth||off.width;
+    const nh=fi.naturalHeight||fi.clientHeight||off.height;
+    cnv.width=nw;cnv.height=nh;
+    ctx.clearRect(0,0,nw,nh);
     document.getElementById('pk-media-card').classList.add('scanning');
     const{boxes,scores,classIds,sel}=await runInference(fi,0.4);
     document.getElementById('pk-media-card').classList.remove('scanning');
-    ctx.clearRect(0,0,cnv.width,cnv.height);
     if(sel.length){
-      const detected=drawBoxes(ctx,sel,boxes,scores,classIds,cnv.width,cnv.height,true,true);
+      const detected=drawBoxes(ctx,sel,boxes,scores,classIds,nw,nh,true,true);
       detected.forEach(lbl=>pkAddCard(pk.activeScanTarget,lbl));
       showToast(`📸 Found: ${detected.join(', ')}`);
     }else{showToast('No cards detected — try manually');}
