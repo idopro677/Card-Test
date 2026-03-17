@@ -3,156 +3,134 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Card Detector</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.16.0"></script>
+    <title>YOLOv8 Object Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0"></script>
     <style>
-        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 15px; }
-        #canvas-container { position: relative; display: inline-block; margin-top: 20px; }
-        canvas { position: absolute; left: 0; top: 0; }
-        video { border-radius: 10px; background: black; }
-        .controls { margin: 20px 0; }
-        button, input { padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; margin: 5px; }
-        button { background: #4CAF50; color: white; }
-        #status { font-weight: bold; color: #ffcc00; margin: 10px; }
+        body { font-family: sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
+        .container { max-width: 700px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #canvas-wrapper { position: relative; display: inline-block; margin-top: 20px; border: 2px solid #ddd; }
+        canvas { display: block; max-width: 100%; height: auto; }
+        .controls { margin-bottom: 20px; }
+        #status { color: #666; font-style: italic; margin-bottom: 10px; }
+        input[type="file"] { margin: 10px 0; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>Card Detector (YOLOv8)</h1>
-    <p id="status">Loading Model...</p>
-
+    <h1>YOLOv8 Image Processor</h1>
+    <p id="status">Loading model...</p>
+    
     <div class="controls">
-        <button id="start-webcam">Start Camera</button>
-        <input type="file" id="file-upload" accept="image/*">
+        <input type="file" id="imageUpload" accept="image/*" disabled>
     </div>
 
-    <div id="canvas-container">
-        <video id="webcam" width="640" height="640" autoplay playsinline style="display:none;"></video>
-        <canvas id="output-canvas"></canvas>
+    <div id="canvas-wrapper">
+        <canvas id="outputCanvas"></canvas>
     </div>
 </div>
 
 <script>
     const status = document.getElementById('status');
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('output-canvas');
+    const imageUpload = document.getElementById('imageUpload');
+    const canvas = document.getElementById('outputCanvas');
     const ctx = canvas.getContext('2d');
-    const fileUpload = document.getElementById('file-upload');
-    const startWebcamBtn = document.getElementById('start-webcam');
 
     let model;
-    // THESE ARE YOUR 52 CLASSES FROM THE NOTEBOOK
-    const labels = ["10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S", "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S", "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S", "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S", "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS", "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS", "QC", "QD", "QH", "QS"];
+    // Replace these with your actual class names from your training
+    const labels = ["Class_0", "Class_1", "Class_2"]; 
 
-    // 1. Load the model
-    async function init() {
+    // 1. Load the Model
+    async function loadModel() {
         try {
+            // Assumes files are in a folder named 'model'
             model = await tf.loadGraphModel('model/model.json');
-            status.innerText = "Model Ready!";
-            status.style.color = "#4CAF50";
-        } catch (e) {
-            status.innerText = "Error loading model: " + e.message;
-        }
-    }
-
-    // 2. Updated Detection Function (Using .execute() for speed)
-    async function detect(source) {
-        if (!model) return;
-
-        const tfImg = tf.tidy(() => {
-            return tf.browser.fromPixels(source)
-                .resizeNearestNeighbor([640, 640])
-                .toFloat()
-                .div(255.0)
-                .expandDims();
-        });
-
-        // Use execute() instead of executeAsync() per the console's suggestion
-        const result = model.execute(tfImg);
-        const res = result.arraySync()[0]; 
-        
-        ctx.clearRect(0, 0, 640, 640);
-        ctx.drawImage(source, 0, 0, 640, 640);
-
-        processYOLO(res);
-
-        // Clean up memory
-        tf.dispose([tfImg, result]);
-    }
-
-    // 3. Robust Webcam Handler
-    startWebcamBtn.addEventListener('click', async () => {
-        status.innerText = "Requesting Camera...";
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment" } 
-            });
-            video.srcObject = stream;
-            video.style.display = "block";
-            canvas.width = 640;
-            canvas.height = 640;
-            
-            video.onloadedmetadata = () => {
-                status.innerText = "Live Detection Active";
-                setInterval(() => detect(video), 100);
-            };
+            status.innerText = "Model loaded. Upload an image!";
+            imageUpload.disabled = false;
         } catch (err) {
-            status.innerText = "Camera Error: " + err.name;
-            console.error("Camera access denied or not found:", err);
-            alert("Please allow camera access in your browser settings.");
+            status.innerText = "Error loading model: " + err.message;
         }
+    }
+
+    // 2. Process Uploaded Image
+    imageUpload.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        
+        img.onload = async () => {
+            status.innerText = "Processing...";
+            
+            // Set canvas size to original image size for display
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+
+            // Run detection
+            await detect(img);
+            status.innerText = "Detection complete.";
+        };
     });
 
-    // 4. Run Detection
+    // 3. Run Inference
     async function detect(source) {
-        if (!model) return;
+        const [modelWidth, modelHeight] = [640, 640];
 
-        const tfImg = tf.browser.fromPixels(source)
-            .resizeNearestNeighbor([640, 640])
-            .toFloat()
-            .div(255.0)
-            .expandDims();
+        const tensor = tf.tidy(() => {
+            return tf.browser.fromPixels(source)
+                .resizeNearestNeighbor([modelWidth, modelHeight])
+                .toFloat()
+                .div(255.0)
+                .expandDims(0);
+        });
 
-        const result = await model.executeAsync(tfImg);
+        const predictions = await model.executeAsync(tensor);
         
-        // Clear previous drawings
-        ctx.clearRect(0, 0, 640, 640);
-        ctx.drawImage(source, 0, 0, 640, 640);
+        // YOLOv8 output is usually [1, 84, 8400] or [1, 8400, 84]
+        // We need to transpose and process
+        const res = predictions.arraySync()[0]; 
+        renderBoxes(res, source.width, source.height);
 
-        const res = result.arraySync()[0]; 
-        // YOLOv8 output: [8400, 56] -> boxes + 52 classes
-        // Note: Simple logic to show top detection
-        processYOLO(res);
-
-        tf.dispose([tfImg, result]);
+        tf.dispose([tensor, predictions]);
     }
 
-    function processYOLO(output) {
+    // 4. Draw Results
+    function renderBoxes(output, imgWidth, imgHeight) {
         ctx.strokeStyle = "#00FF00";
         ctx.lineWidth = 3;
+        ctx.font = "16px Arial";
         ctx.fillStyle = "#00FF00";
-        ctx.font = "18px Arial";
 
+        // This loop handles the common YOLOv8 output format
+        // output[0...3] are x,y,w,h; output[4...] are class scores
         for (let i = 0; i < 8400; i++) {
-            const scores = output.slice(4).map(row => row[i]);
-            const maxScore = Math.max(...scores);
-            if (maxScore > 0.5) {
-                const classIdx = scores.indexOf(maxScore);
-                const x = output[0][i];
-                const y = output[1][i];
-                const w = output[2][i];
-                const h = output[3][i];
+            const classes = output.slice(4).map(col => col[i]);
+            const probability = Math.max(...classes);
+
+            if (probability > 0.5) {
+                const classId = classes.indexOf(probability);
                 
-                ctx.strokeRect(x - w/2, y - h/2, w, h);
-                ctx.fillText(`${labels[classIdx]} (${Math.round(maxScore*100)}%)`, x - w/2, y - h/2 - 5);
+                // Scale coordinates back to original image size
+                let x = output[0][i] * (imgWidth / 640);
+                let y = output[1][i] * (imgHeight / 640);
+                let w = output[2][i] * (imgWidth / 640);
+                let h = output[3][i] * (imgHeight / 640);
+
+                const left = x - w / 2;
+                const top = y - h / 2;
+
+                ctx.strokeRect(left, top, w, h);
+                ctx.fillText(
+                    `${labels[classId] || classId}: ${(probability * 100).toFixed(1)}%`, 
+                    left, top > 10 ? top - 5 : 10
+                );
             }
         }
     }
 
-    init();
+    loadModel();
 </script>
 </body>
 </html>
