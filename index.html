@@ -799,6 +799,7 @@ canvas{
   <div class="panel" id="panel-photo">
     <div class="btns">
       <label class="btn btn-upload">🖼️ Upload Image<input type="file" id="upload-input" accept="image/*"/></label>
+      <button class="btn btn-cam" id="photo-cam-btn">📷 Camera</button>
       <button class="btn btn-reset" id="reset-btn">🔄 Reset</button>
     </div>
     <div class="glass-card">
@@ -815,10 +816,14 @@ canvas{
       <div class="ph" id="photo-ph">
         <div class="ph-circle">🃏</div>
         <h3>No image yet!</h3>
-        <p>Upload a photo with playing cards to analyze</p>
+        <p>Upload a photo or use the camera</p>
       </div>
+      <video id="photo-video" autoplay playsinline muted style="display:none;width:100%;height:auto;border-radius:19px;position:relative;z-index:1;vertical-align:top"></video>
       <img id="img-el" alt="card photo"/>
       <canvas id="photo-canvas"></canvas>
+    </div>
+    <div id="photo-capture-bar" style="display:none;justify-content:center;margin-bottom:18px">
+      <button class="btn btn-freeze" id="photo-capture-btn" style="display:inline-flex">📸 Capture &amp; Analyze</button>
     </div>
     <div class="hist-section" id="photo-hist-sec">
       <div class="hist-title">📜 Recent Scans</div>
@@ -1255,15 +1260,19 @@ function drawBoxes(ctx,sel,boxes,scores,classIds,W,H,labels,confPct){
     ctx.closePath();ctx.stroke();
     if(labels){
       const displayLbl=confPct?`${lbl} ${sc}%`:lbl;
-      const ly=yn>24?yn-22:yn+2;
-      ctx.font='bold 20px Raleway,Arial';
-      const tw=ctx.measureText(displayLbl).width+14;
+      const fontSize=Math.max(14,Math.min(52,Math.round(Math.min(W,H)*0.032)));
+      const padV=Math.round(fontSize*0.35);
+      const padH=Math.round(fontSize*0.55);
+      const boxH=fontSize+padV*2;
+      const ly=yn>boxH+2?yn-boxH-2:yn+2;
+      ctx.font=`bold ${fontSize}px Raleway,Arial`;
+      const tw=ctx.measureText(displayLbl).width+padH*2;
       ctx.fillStyle=col;
       ctx.beginPath();
-      ctx.roundRect(xn,ly,tw,20,26);
+      ctx.roundRect(xn,ly,tw,boxH,Math.round(fontSize*0.25));
       ctx.fill();
       ctx.fillStyle='#fff';
-      ctx.fillText(displayLbl,xn+14,ly+18);
+      ctx.fillText(displayLbl,xn+padH,ly+fontSize+padV-Math.round(fontSize*0.1));
     }
   }
   return detectedLabels;
@@ -1494,6 +1503,12 @@ document.getElementById('upload-input').addEventListener('change',async e=>{
   r.readAsDataURL(f);e.target.value='';
 });
 document.getElementById('reset-btn').addEventListener('click',()=>{
+  // Stop photo camera if running
+  const pv=document.getElementById('photo-video');
+  if(pv._stream){pv._stream.getTracks().forEach(t=>t.stop());pv._stream=null;}
+  pv.style.display='none';
+  document.getElementById('photo-capture-bar').style.display='none';
+  document.getElementById('photo-cam-btn').textContent='📷 Camera';
   imgEl.style.display='none';
   document.getElementById('photo-results').style.display='none';
   document.getElementById('photo-ph').style.display='flex';
@@ -1503,6 +1518,77 @@ document.getElementById('reset-btn').addEventListener('click',()=>{
   updateStats();renderHistory('live');renderHistory('photo');
   showToast('🔄 Reset! Ready for a fresh hand!');
 });
+
+/* ── Photo mode camera ── */
+(()=>{
+  const camBtn=document.getElementById('photo-cam-btn');
+  const capBar=document.getElementById('photo-capture-bar');
+  const capBtn=document.getElementById('photo-capture-btn');
+  const pv=document.getElementById('photo-video');
+
+  camBtn.addEventListener('click',async()=>{
+    if(pv._stream){
+      // Camera is running — stop it
+      pv._stream.getTracks().forEach(t=>t.stop());pv._stream=null;
+      pv.style.display='none';
+      capBar.style.display='none';
+      camBtn.textContent='📷 Camera';
+      camBtn.style.background='';
+      if(!imgEl.src||imgEl.style.display==='none'){
+        document.getElementById('photo-ph').style.display='flex';
+      }
+      return;
+    }
+    // Start camera
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}});
+      pv._stream=stream;
+      pv.srcObject=stream;
+      pv.style.display='block';
+      imgEl.style.display='none';
+      document.getElementById('photo-ph').style.display='none';
+      document.getElementById('photo-results').style.display='none';
+      pc.clearRect(0,0,photoCanvas.width,photoCanvas.height);
+      capBar.style.display='flex';
+      camBtn.textContent='⏹️ Stop Camera';
+      camBtn.style.background='linear-gradient(135deg,#3a0808,#6a1a1a)';
+    }catch(e){
+      showToast('❌ Camera access denied!',3000);
+    }
+  });
+
+  capBtn.addEventListener('click',async()=>{
+    if(!pv._stream)return;
+    const off=document.createElement('canvas');
+    off.width=pv.videoWidth||640;off.height=pv.videoHeight||480;
+    off.getContext('2d').drawImage(pv,0,0);
+    const imgSrc=off.toDataURL('image/jpeg',.87);
+    // Stop camera
+    pv._stream.getTracks().forEach(t=>t.stop());pv._stream=null;
+    pv.style.display='none';
+    capBar.style.display='none';
+    camBtn.textContent='📷 Camera';
+    camBtn.style.background='';
+    // Show captured image
+    imgEl.src=imgSrc;imgEl.style.display='block';
+    document.getElementById('photo-ph').style.display='none';
+    document.getElementById('photo-results').style.display='none';
+    imgEl.onload=async()=>{
+      await new Promise(r=>requestAnimationFrame(r));
+      const nw=imgEl.naturalWidth||off.width;
+      const nh=imgEl.naturalHeight||off.height;
+      photoCanvas.width=nw;photoCanvas.height=nh;
+      pc.clearRect(0,0,nw,nh);
+      document.getElementById('photo-media').classList.add('scanning');
+      playSound('scan');
+      const{boxes,scores,classIds,sel}=await runInference(imgEl,photoConf);
+      document.getElementById('photo-media').classList.remove('scanning');
+      const detected=sel.length?drawBoxes(pc,sel,boxes,scores,classIds,nw,nh,photoLabels,photoConfPct):[];
+      showResults(detected,imgSrc,'photo');
+    };
+    showToast('📸 Captured — analyzing…');
+  });
+})();
 
 /* ════════════════════════════════════════════════
    TOGGLE HELPERS
