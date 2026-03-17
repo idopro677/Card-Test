@@ -1256,7 +1256,7 @@ function drawBoxes(ctx,sel,boxes,scores,classIds,W,H,labels,confPct){
     if(labels){
       const displayLbl=confPct?`${lbl} ${sc}%`:lbl;
       const ly=yn>24?yn-22:yn+2;
-      ctx.font='bold 13px Raleway,Arial';
+      ctx.font='bold 20px Raleway,Arial';
       const tw=ctx.measureText(displayLbl).width+14;
       ctx.fillStyle=col;
       ctx.beginPath();
