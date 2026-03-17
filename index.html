@@ -4,122 +4,135 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YOLOv8 Card Detector</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.17.0"></script>
-    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.16.0"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #2c3e50; color: white; }
-        .container { position: relative; display: inline-block; margin-top: 20px; }
-        video, canvas { border-radius: 10px; max-width: 100%; }
+        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 15px; }
+        #canvas-container { position: relative; display: inline-block; margin-top: 20px; }
         canvas { position: absolute; left: 0; top: 0; }
-        .controls { margin: 20px; }
-        #status { color: #f1c40f; font-weight: bold; }
+        video { border-radius: 10px; background: black; }
+        .controls { margin: 20px 0; }
+        button, input { padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; margin: 5px; }
+        button { background: #4CAF50; color: white; }
+        #status { font-weight: bold; color: #ffcc00; margin: 10px; }
     </style>
 </head>
 <body>
 
-    <h1>Playing Card Detector</h1>
+<div class="container">
+    <h1>Card Detector (YOLOv8)</h1>
     <p id="status">Loading Model...</p>
 
     <div class="controls">
-        <button onclick="setupCamera()">Start Camera</button>
+        <button id="start-webcam">Start Camera</button>
+        <input type="file" id="file-upload" accept="image/*">
     </div>
 
-    <div class="container">
-        <video id="webcam" autoplay playsinline muted width="640" height="640"></video>
-        <canvas id="overlay"></canvas>
+    <div id="canvas-container">
+        <video id="webcam" width="640" height="640" autoplay playsinline style="display:none;"></video>
+        <canvas id="output-canvas"></canvas>
     </div>
+</div>
 
-    <script>
-        let model;
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('overlay');
-        const ctx = canvas.getContext('2d');
+<script>
+    const status = document.getElementById('status');
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output-canvas');
+    const ctx = canvas.getContext('2d');
+    const fileUpload = document.getElementById('file-upload');
+    const startWebcamBtn = document.getElementById('start-webcam');
 
-        // These MUST match the order in your best.pt/data.yaml
-        const labels = [
-            "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S", "3C", "3D", "3H", "3S", 
-            "4C", "4D", "4H", "4S", "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S", 
-            "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S", "9C", "9D", "9H", "9S", 
-            "AC", "AD", "AH", "AS", "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS", 
-            "QC", "QD", "QH", "QS"
-        ];
+    let model;
+    // THESE ARE YOUR 52 CLASSES FROM THE NOTEBOOK
+    const labels = ["10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S", "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S", "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S", "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S", "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS", "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS", "QC", "QD", "QH", "QS"];
 
-        async function init() {
-            try {
-                // Points to your 'model' folder
-                model = await tf.loadGraphModel('model/model.json');
-                document.getElementById('status').innerText = "Model Ready! Point at a card.";
-            } catch (e) {
-                document.getElementById('status').innerText = "Error loading model: " + e;
-                console.error(e);
-            }
+    // 1. Load the model from your 'model' folder
+    async function init() {
+        try {
+            // Updated path to look inside 'model' folder
+            model = await tf.loadGraphModel('model/model.json');
+            status.innerText = "Model Ready!";
+        } catch (e) {
+            status.innerText = "Error loading model: " + e.message;
+            console.error(e);
         }
+    }
 
-        async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                detectFrame();
-            };
-        }
+    // 2. File Upload Handler
+    fileUpload.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+            video.style.display = "none";
+            canvas.width = 640;
+            canvas.height = 640;
+            ctx.drawImage(img, 0, 0, 640, 640);
+            detect(canvas);
+        };
+    });
 
-        async function detectFrame() {
-            tf.engine().startScope();
-            
-            // 1. Preprocess the image
-            const input = tf.browser.fromPixels(video)
-                .resizeNearestNeighbor([640, 640])
-                .toFloat()
-                .div(255.0)
-                .expandDims();
+    // 3. Webcam Handler
+    startWebcamBtn.addEventListener('click', async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        video.style.display = "block";
+        canvas.width = 640;
+        canvas.height = 640;
+        video.onloadedmetadata = () => {
+            setInterval(() => detect(video), 100);
+        };
+    });
 
-            // 2. Run Inference
-            const result = await model.executeAsync(input);
-            
-            // 3. Process Output (YOLOv8 specific)
-            const res = result.arraySync()[0];
-            renderBoxes(res);
+    // 4. Run Detection
+    async function detect(source) {
+        if (!model) return;
 
-            tf.engine().endScope();
-            requestAnimationFrame(detectFrame);
-        }
+        const tfImg = tf.browser.fromPixels(source)
+            .resizeNearestNeighbor([640, 640])
+            .toFloat()
+            .div(255.0)
+            .expandDims();
 
-        function renderBoxes(predictions) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // Note: YOLOv8 TFJS output is [1, 56, 8400] 
-            // 4 coords + 52 classes = 56
-            // This is a simplified loop for detection logic
-            for (let i = 0; i < 8400; i++) {
-                // Simplified threshold check for performance
-                let maxProb = 0;
-                let classIdx = -1;
+        const result = await model.executeAsync(tfImg);
+        
+        // Clear previous drawings
+        ctx.clearRect(0, 0, 640, 640);
+        ctx.drawImage(source, 0, 0, 640, 640);
+
+        const res = result.arraySync()[0]; 
+        // YOLOv8 output: [8400, 56] -> boxes + 52 classes
+        // Note: Simple logic to show top detection
+        processYOLO(res);
+
+        tf.dispose([tfImg, result]);
+    }
+
+    function processYOLO(output) {
+        ctx.strokeStyle = "#00FF00";
+        ctx.lineWidth = 3;
+        ctx.fillStyle = "#00FF00";
+        ctx.font = "18px Arial";
+
+        for (let i = 0; i < 8400; i++) {
+            const scores = output.slice(4).map(row => row[i]);
+            const maxScore = Math.max(...scores);
+            if (maxScore > 0.5) {
+                const classIdx = scores.indexOf(maxScore);
+                const x = output[0][i];
+                const y = output[1][i];
+                const w = output[2][i];
+                const h = output[3][i];
                 
-                for (let j = 4; j < 56; j++) {
-                    if (predictions[j][i] > maxProb) {
-                        maxProb = predictions[j][i];
-                        classIdx = j - 4;
-                    }
-                }
-
-                if (maxProb > 0.5) {
-                    const [cx, cy, w, h] = [predictions[0][i], predictions[1][i], predictions[2][i], predictions[3][i]];
-                    const x = (cx - w/2) * (canvas.width / 640);
-                    const y = (cy - h/2) * (canvas.height / 640);
-                    
-                    ctx.strokeStyle = "#00FF00";
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(x, y, w * (canvas.width/640), h * (canvas.height/640));
-                    ctx.fillStyle = "#00FF00";
-                    ctx.fillText(`${labels[classIdx]} ${Math.round(maxProb*100)}%`, x, y > 10 ? y - 5 : 10);
-                }
+                ctx.strokeRect(x - w/2, y - h/2, w, h);
+                ctx.fillText(`${labels[classIdx]} (${Math.round(maxScore*100)}%)`, x - w/2, y - h/2 - 5);
             }
         }
+    }
 
-        init();
-    </script>
+    init();
+</script>
 </body>
 </html>
