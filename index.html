@@ -1260,10 +1260,10 @@ function drawBoxes(ctx,sel,boxes,scores,classIds,W,H,labels,confPct){
       const tw=ctx.measureText(displayLbl).width+14;
       ctx.fillStyle=col;
       ctx.beginPath();
-      ctx.roundRect(xn,ly,tw,20,4);
+      ctx.roundRect(xn,ly,tw,20,26);
       ctx.fill();
       ctx.fillStyle='#fff';
-      ctx.fillText(displayLbl,xn+7,ly+14);
+      ctx.fillText(displayLbl,xn+14,ly+18);
     }
   }
   return detectedLabels;
