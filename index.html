@@ -47,43 +47,63 @@
     // THESE ARE YOUR 52 CLASSES FROM THE NOTEBOOK
     const labels = ["10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S", "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S", "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S", "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S", "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS", "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS", "QC", "QD", "QH", "QS"];
 
-    // 1. Load the model from your 'model' folder
+    // 1. Load the model
     async function init() {
         try {
-            // Updated path to look inside 'model' folder
             model = await tf.loadGraphModel('model/model.json');
             status.innerText = "Model Ready!";
+            status.style.color = "#4CAF50";
         } catch (e) {
             status.innerText = "Error loading model: " + e.message;
-            console.error(e);
         }
     }
 
-    // 2. File Upload Handler
-    fileUpload.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const img = new Image();
-        img.src = URL.createObjectURL(file);
-        img.onload = () => {
-            video.style.display = "none";
+    // 2. Updated Detection Function (Using .execute() for speed)
+    async function detect(source) {
+        if (!model) return;
+
+        const tfImg = tf.tidy(() => {
+            return tf.browser.fromPixels(source)
+                .resizeNearestNeighbor([640, 640])
+                .toFloat()
+                .div(255.0)
+                .expandDims();
+        });
+
+        // Use execute() instead of executeAsync() per the console's suggestion
+        const result = model.execute(tfImg);
+        const res = result.arraySync()[0]; 
+        
+        ctx.clearRect(0, 0, 640, 640);
+        ctx.drawImage(source, 0, 0, 640, 640);
+
+        processYOLO(res);
+
+        // Clean up memory
+        tf.dispose([tfImg, result]);
+    }
+
+    // 3. Robust Webcam Handler
+    startWebcamBtn.addEventListener('click', async () => {
+        status.innerText = "Requesting Camera...";
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" } 
+            });
+            video.srcObject = stream;
+            video.style.display = "block";
             canvas.width = 640;
             canvas.height = 640;
-            ctx.drawImage(img, 0, 0, 640, 640);
-            detect(canvas);
-        };
-    });
-
-    // 3. Webcam Handler
-    startWebcamBtn.addEventListener('click', async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        video.srcObject = stream;
-        video.style.display = "block";
-        canvas.width = 640;
-        canvas.height = 640;
-        video.onloadedmetadata = () => {
-            setInterval(() => detect(video), 100);
-        };
+            
+            video.onloadedmetadata = () => {
+                status.innerText = "Live Detection Active";
+                setInterval(() => detect(video), 100);
+            };
+        } catch (err) {
+            status.innerText = "Camera Error: " + err.name;
+            console.error("Camera access denied or not found:", err);
+            alert("Please allow camera access in your browser settings.");
+        }
     });
 
     // 4. Run Detection
