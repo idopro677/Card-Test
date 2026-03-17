@@ -127,15 +127,18 @@
     </div>
 
 <script>
-    /**
-     * GLOBAL CONFIGURATION & STATE
-     */
     const CONFIG = {
         modelPath: 'model/model.json',
         inputSize: 640,
         scoreThreshold: 0.45,
-        iouThreshold: 0.45, // Critical for NMS (one box per card)
-        labels: ["10C", "2C", "3C", "4C", "5C", "6C", "7C", "8C", "9C", "AC", "JC", "KC", "QC", "10D", "2D", "3D", "4D", "5D", "6D", "7D", "8D", "9D", "AD", "JD", "KD", "QD", "10H", "2H", "3H", "4H", "5H", "6H", "7H", "8H", "9H", "AH", "JH", "KH", "QH", "10S", "2S", "3S", "4S", "5S", "6S", "7S", "8S", "9S", "AS", "JS", "KS", "QS"];    };
+        iouThreshold: 0.3, // Lowered to be stricter (better at preventing double boxes)
+        labels: [
+            "10C", "2C", "3C", "4C", "5C", "6C", "7C", "8C", "9C", "AC", "JC", "KC", "QC",
+            "10D", "2D", "3D", "4D", "5D", "6D", "7D", "8D", "9D", "AD", "JD", "KD", "QD",
+            "10H", "2H", "3H", "4H", "5H", "6H", "7H", "8H", "9H", "AH", "JH", "KH", "QH",
+            "10S", "2S", "3S", "4S", "5S", "6S", "7S", "8S", "9S", "AS", "JS", "KS", "QS"
+        ]
+    };
 
     let model;
     const statusBar = document.getElementById('status-bar');
@@ -148,28 +151,21 @@
 
     let currentImage = null;
 
-    /**
-     * 1. LOAD THE MODEL
-     */
     async function init() {
         try {
-            statusBar.innerText = "⏳ Loading AI Model... please wait.";
+            statusBar.innerText = "⏳ Loading AI Model...";
             model = await tf.loadGraphModel(CONFIG.modelPath);
-            statusBar.innerText = "✅ Model Loaded. Ready to scan cards.";
+            statusBar.innerText = "✅ Model Loaded. Upload or Take a Photo.";
             statusBar.style.color = "#4CAF50";
         } catch (err) {
-            statusBar.innerText = "❌ Error: Could not find 'model/model.json'";
+            statusBar.innerText = "❌ Error: Folder 'model' or 'model.json' not found.";
             console.error(err);
         }
     }
 
-    /**
-     * 2. HANDLE STORAGE UPLOAD
-     */
     fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
         const reader = new FileReader();
         reader.onload = (event) => {
             const img = new Image();
@@ -177,51 +173,54 @@
                 currentImage = img;
                 drawImageToCanvas(img);
                 runBtn.style.display = "inline-block";
-                statusBar.innerText = "Image Loaded. Click 'Run AI Detection'.";
+                statusBar.innerText = "Image Ready. Click 'Run AI Detection'.";
             };
             img.src = event.target.result;
         };
         reader.readAsDataURL(file);
     });
 
-    /**
-     * 3. HANDLE CAMERA UPLOAD
-     */
     cameraBtn.addEventListener('click', async () => {
+        if (cameraBtn.innerText.includes("Capture")) {
+            capturePhoto();
+            return;
+        }
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
             video.srcObject = stream;
             video.style.display = "block";
             canvas.style.display = "none";
-            statusBar.innerText = "Camera Active. Click button again to capture.";
-            
             cameraBtn.innerText = "📸 Capture Photo";
-            cameraBtn.onclick = () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                ctx.drawImage(video, 0, 0);
-                
-                // Stop camera
-                stream.getTracks().forEach(track => track.stop());
-                video.style.display = "none";
-                canvas.style.display = "block";
-                
-                const imgData = canvas.toDataURL('image/png');
-                const img = new Image();
-                img.onload = () => {
-                    currentImage = img;
-                    runBtn.style.display = "inline-block";
-                };
-                img.src = imgData;
-                
-                cameraBtn.innerText = "📷 Use Camera";
-                cameraBtn.onclick = null; // Reset logic
-                location.reload; // Simple reset for this demo
-            };
+            cameraBtn.style.backgroundColor = "#ff5722";
+            statusBar.innerText = "Camera Active.";
         } catch (err) {
             alert("Camera access denied.");
         }
     });
+
+    function capturePhoto() {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        
+        const stream = video.srcObject;
+        stream.getTracks().forEach(track => track.stop());
+        
+        video.style.display = "none";
+        canvas.style.display = "block";
+        
+        const img = new Image();
+        img.onload = () => {
+            currentImage = img;
+            runBtn.style.display = "inline-block";
+        };
+        img.src = canvas.toDataURL('image/png');
+        
+        cameraBtn.innerText = "📷 Use Camera";
+        cameraBtn.style.backgroundColor = "#9c27b0";
+        statusBar.innerText = "Captured! Click Run AI.";
+    }
 
     function drawImageToCanvas(img) {
         canvas.width = img.width;
@@ -229,55 +228,37 @@
         ctx.drawImage(img, 0, 0);
     }
 
-    /**
-     * 4. RUN INFERENCE & NMS
-     */
     runBtn.addEventListener('click', async () => {
         if (!model || !currentImage) return;
-
-        statusBar.innerText = "🧠 Analyzing image...";
+        statusBar.innerText = "🧠 Analyzing...";
         runBtn.disabled = true;
 
-        // Preprocessing
-        const [modelWidth, modelHeight] = [CONFIG.inputSize, CONFIG.inputSize];
         const input = tf.tidy(() => {
             return tf.browser.fromPixels(currentImage)
-                .resizeNearestNeighbor([modelWidth, modelHeight])
+                .resizeNearestNeighbor([CONFIG.inputSize, CONFIG.inputSize])
                 .toFloat()
                 .div(255.0)
                 .expandDims(0);
         });
 
-        // Run Model
         const res = await model.executeAsync(input);
-        
-        // Post-processing
-        const resArray = res.arraySync()[0]; // Shape [84, 8400]
+        const resArray = res.arraySync()[0]; 
         const detections = processYOLOOutput(resArray, currentImage.width, currentImage.height);
         
-        // Draw Results
         drawDetections(detections);
-
-        statusBar.innerText = `Detection Complete! Found ${detections.length} cards.`;
+        statusBar.innerText = `Done! Found ${detections.length} cards.`;
         runBtn.disabled = false;
         tf.dispose([input, res]);
     });
 
-    /**
-     * YOLOv8 OUTPUT PARSING + MANUAL NMS
-     * We need to filter thousands of boxes down to just one per card.
-     */
     function processYOLOOutput(output, imgWidth, imgHeight) {
         const boxes = [];
         const scores = [];
         const classIds = [];
-
-        // YOLOv8 output: [x_center, y_center, width, height, class0_score, class1_score, ...]
-        const numPredictions = output[0].length; // 8400
+        const numPredictions = output[0].length; 
         const numClasses = output.length - 4;
 
         for (let i = 0; i < numPredictions; i++) {
-            // Find strongest class score
             let maxScore = 0;
             let classId = -1;
             for (let c = 0; c < numClasses; c++) {
@@ -293,7 +274,6 @@
                 const w = output[2][i];
                 const h = output[3][i];
 
-                // Convert to [y1, x1, y2, x2] for TFJS NMS
                 const x1 = (cx - w / 2) * (imgWidth / 640);
                 const y1 = (cy - h / 2) * (imgHeight / 640);
                 const x2 = (cx + w / 2) * (imgWidth / 640);
@@ -305,11 +285,10 @@
             }
         }
 
-        // Perform Non-Maximum Suppression (The "One box per card" logic)
         const nmsIndices = tf.image.nonMaxSuppression(
             tf.tensor2d(boxes), 
             tf.tensor1d(scores), 
-            20, // Max 20 cards per photo
+            20, 
             CONFIG.iouThreshold, 
             CONFIG.scoreThreshold
         ).arraySync();
@@ -327,19 +306,13 @@
 
         detections.forEach(det => {
             const [y1, x1, y2, x2] = det.box;
-            const w = x2 - x1;
-            const h = y2 - y1;
-
-            // Draw Box
             ctx.strokeStyle = "#00FF00";
             ctx.lineWidth = 4;
-            ctx.strokeRect(x1, y1, w, h);
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-            // Draw Label
             ctx.fillStyle = "#00FF00";
             ctx.font = "bold 20px Arial";
-            const text = `${det.class} ${Math.round(det.score * 100)}%`;
-            ctx.fillText(text, x1, y1 > 25 ? y1 - 10 : y1 + 25);
+            ctx.fillText(`${det.class} ${Math.round(det.score * 100)}%`, x1, y1 > 25 ? y1 - 10 : y1 + 25);
         });
     }
 
