@@ -921,6 +921,16 @@ canvas{
     <!-- Advice -->
     <div id="bj-advice-wrap"></div>
 
+    <!-- Burn cards -->
+    <div class="glass-card">
+      <h3>🔥 Burned Cards (affect count &amp; availability)</h3>
+      <div class="bj-cards-list" id="bj-burn-cards" style="min-height:28px"></div>
+      <div class="card-picker-wrap" style="margin-top:8px"><div class="card-picker" id="bj-picker-burn"></div></div>
+      <div class="btns" style="margin-top:10px;margin-bottom:0;justify-content:flex-start;gap:8px">
+        <button class="btn btn-cam" style="padding:8px 14px;font-size:12px" id="bj-cam-burn">📷 Scan Burn</button>
+      </div>
+    </div>
+
     <!-- Options row -->
     <div class="bj-options-row">
       <button class="btn btn-deal" id="bj-calculate">🧠 Calculate Move</button>
@@ -954,13 +964,7 @@ canvas{
   ══════════════════════════════════════ -->
   <div class="panel" id="panel-poker">
 
-    <!-- Stage indicator -->
-    <div class="poker-stage-indicator">
-      <div class="poker-stage active" data-stage="preflop" id="ps-preflop">Pre-Flop</div>
-      <div class="poker-stage" data-stage="flop" id="ps-flop">Flop</div>
-      <div class="poker-stage" data-stage="turn" id="ps-turn">Turn</div>
-      <div class="poker-stage" data-stage="river" id="ps-river">River</div>
-    </div>
+    <!-- Stage auto-detected from community card count -->
 
     <!-- Cards layout -->
     <div class="poker-layout">
@@ -982,14 +986,13 @@ canvas{
       <div class="poker-card-slot">
         <div class="poker-slot-header">
           <div class="poker-slot-title">🂠 Community Cards</div>
-          <div class="poker-slot-count" id="pk-community-count">0/5</div>
+          <div class="poker-slot-count"><span id="pk-stage-badge" style="font-family:'Playfair Display',serif;color:var(--gold);font-size:12px;letter-spacing:0.5px">Pre-Flop</span> &nbsp;<span id="pk-community-count">0/5</span></div>
         </div>
         <div class="poker-slot-body">
           <div class="bj-cards-list" id="pk-community-cards"></div>
           <div class="card-picker-wrap"><div class="card-picker" id="pk-picker-community"></div></div>
           <div class="btns" style="margin-top:10px;margin-bottom:0;justify-content:flex-start;gap:7px">
             <button class="btn btn-cam" style="padding:7px 12px;font-size:12px" id="pk-cam-community">📷 Scan</button>
-            <button class="btn btn-gold" style="padding:7px 12px;font-size:12px" id="pk-add-street">+ Next Street</button>
           </div>
         </div>
       </div>
@@ -1092,7 +1095,9 @@ let bj = {
   shoeDecks: 6,
   surrenderAllowed: false,
   cardsSeenTotal: 0,
-  activeScanTarget: null, // 'player' | 'dealer'
+  shoeHistory: [],   // all cards committed from previous hands this shoe
+  burnCards: [],     // burned cards (affect count & availability)
+  activeScanTarget: null, // 'player' | 'dealer' | 'burn'
   bjVideo: null, bjStream: null
 };
 
@@ -1856,12 +1861,44 @@ function renderBJHand(which){
   valEl.innerHTML=cards.length?`${total}<small>${soft?' (soft)':''} pts</small>`:`<span style="color:var(--text-muted)">—</span>`;
 }
 
-/* ── Update BJ pickers (mark selected/unavailable per picker) ── */
+/* ── How many copies of this card remain in the shoe ── */
+function bjCopiesRemaining(label){
+  const inHistory = bj.shoeHistory.filter(c=>c===label).length;
+  const inBurn    = bj.burnCards.filter(c=>c===label).length;
+  const inHand    = bjUsedCards().filter(c=>c===label).length;
+  return bj.shoeDecks - inHistory - inBurn - inHand;
+}
+
+/* ── Update BJ pickers — shoe-aware, allows duplicates per deck count ── */
 function updateBJPickers(){
-  // player picker: selected = playerCards, unavailable = dealerCards
-  updatePickerState('bj-picker-player', bj.playerCards, bj.dealerCards);
-  // dealer picker: selected = dealerCards, unavailable = playerCards
-  updatePickerState('bj-picker-dealer', bj.dealerCards, bj.playerCards);
+  updateBJPickerState('bj-picker-player', bj.playerCards, bj.dealerCards);
+  updateBJPickerState('bj-picker-dealer', bj.dealerCards, bj.playerCards);
+  updateBJPickerState('bj-picker-burn',   bj.burnCards,   [...bj.playerCards,...bj.dealerCards]);
+}
+
+function updateBJPickerState(pickerId, ownCards, otherCards){
+  document.querySelectorAll(`#${pickerId} .pick-card`).forEach(btn=>{
+    const lbl=btn.dataset.label;
+    btn.classList.remove('selected','unavailable');
+
+    // Count how many of this card are in ownCards (may be >1 with multi-deck)
+    const ownCount = ownCards.filter(c=>c===lbl).length;
+    if(ownCount > 0){
+      btn.classList.add('selected');
+      // Show count badge if more than one
+      btn.dataset.ownCount = ownCount > 1 ? `×${ownCount}` : '';
+    } else {
+      btn.dataset.ownCount = '';
+      // Check if exhausted from shoe (history + burn + both hands)
+      const remaining = bjCopiesRemaining(lbl);
+      if(remaining <= 0){
+        btn.classList.add('unavailable');
+        btn.title = 'None left in shoe';
+      } else {
+        btn.title = `${remaining} of ${bj.shoeDecks} left`;
+      }
+    }
+  });
 }
 
 function updatePickerState(pickerId, ownCards, otherCards){
@@ -1876,12 +1913,55 @@ function updatePickerState(pickerId, ownCards, otherCards){
 /* ── Add card to BJ hand ── */
 function bjAddCard(which, label){
   const arr=which==='player'?bj.playerCards:bj.dealerCards;
-  if(bjUsedCards().includes(label)){showToast('Card already in play!');return;}
   if(which==='dealer'&&arr.length>=1){showToast('Dealer shows only one up card.');return;}
+  // Check shoe availability (accounts for multi-deck)
+  if(bjCopiesRemaining(label)<=0){
+    showToast(`No ${label} copies left in the shoe!`);return;
+  }
   arr.push(label);
   bj.runningCount+=hiLoValue(getRank(label));
   bj.cardsSeenTotal++;
   renderBJHand(which);updateBJPickers();updateBJCount();
+}
+
+/* ── Add burn card ── */
+function bjAddBurn(label){
+  if(bjCopiesRemaining(label)<=0){
+    showToast(`No ${label} copies left in the shoe!`);return;
+  }
+  bj.burnCards.push(label);
+  bj.runningCount+=hiLoValue(getRank(label));
+  bj.cardsSeenTotal++;
+  renderBJBurnCards();updateBJPickers();updateBJCount();
+}
+
+/* ── Remove burn card (one copy at a time) ── */
+function bjRemoveBurn(label){
+  const idx=bj.burnCards.lastIndexOf(label); // remove most recent
+  if(idx===-1)return;
+  bj.runningCount-=hiLoValue(getRank(label));
+  bj.cardsSeenTotal--;
+  bj.burnCards.splice(idx,1);
+  renderBJBurnCards();updateBJPickers();updateBJCount();
+}
+
+/* ── Render BJ burn chips ── */
+function renderBJBurnCards(){
+  const list=document.getElementById('bj-burn-cards');
+  if(!list)return;
+  list.innerHTML='';
+  bj.burnCards.forEach((c,i)=>{
+    const suit=getSuit(c);
+    const info=SUIT_INFO[suit]||{emoji:'?',color:'#888'};
+    const chip=document.createElement('div');
+    chip.className=`bj-card-chip suit-${suit}`;
+    chip.style.borderColor=info.color+'66';
+    chip.innerHTML=`<span style="color:${info.color}">${info.emoji}</span>${getRank(c)}<span class="rm">✕</span>`;
+    chip.querySelector('.rm').addEventListener('click',e=>{
+      e.stopPropagation();bjRemoveBurn(c);
+    });
+    list.appendChild(chip);
+  });
 }
 
 /* ── Update count display ── */
@@ -1895,12 +1975,15 @@ function updateBJCount(){
   rcEl.className='count-num'+(rc>2?' pos':rc<-2?' neg':'');
   tcEl.textContent=(tc>0?'+':'')+tc.toFixed(1);
   tcEl.className='count-num'+(tc>1?' pos':tc<-1?' neg':'');
+  const totalShoeCards=bj.shoeDecks*52;
+  const dealtTotal=bj.cardsSeenTotal;
+  const penetration=totalShoeCards>0?Math.round(dealtTotal/totalShoeCards*100):0;
   let adv='', advTitle='';
   if(tc>=4){advTitle='Strong Player Edge';adv='Shoe is rich in 10s and Aces. Increase bet. Dealer likely to bust on stiff hands.';}
   else if(tc>=2){advTitle='Slight Player Edge';adv='Moderately favorable count. Consider slightly higher bets and be more aggressive on doubles/splits.';}
   else if(tc<=-2){advTitle='House Has Edge';adv='Shoe is rich in small cards. Reduce bet. Avoid unnecessary doubles or splits.';}
   else{advTitle='Neutral';adv='Count is balanced — play basic strategy at normal bet size.';}
-  advEl.innerHTML=`<strong>${advTitle}</strong>${adv}`;
+  advEl.innerHTML=`<strong>${advTitle}</strong>${adv}<br><span style="font-size:11px;color:var(--text-muted);margin-top:4px;display:block">Shoe: ${dealtTotal}/${totalShoeCards} cards dealt (${penetration}%) · Burn: ${bj.burnCards.length}</span>`;
 }
 
 /* ── Calculate & display move ── */
@@ -1930,18 +2013,21 @@ function renderBJAdvice({move,reason}){
 
 /* ── New hand ── */
 document.getElementById('bj-new-hand').addEventListener('click',()=>{
-  bj.playerCards=[];bj.dealerCards=[];
-  renderBJHand('player');renderBJHand('dealer');
+  // Commit current hand + burn to shoe history before clearing
+  bj.shoeHistory.push(...bj.playerCards,...bj.dealerCards,...bj.burnCards);
+  bj.playerCards=[];bj.dealerCards=[];bj.burnCards=[];
+  renderBJHand('player');renderBJHand('dealer');renderBJBurnCards();
   updateBJPickers();
   document.getElementById('bj-advice-wrap').innerHTML='';
-  showToast('🃏 New hand — count preserved');
+  showToast(`🃏 New hand — count preserved (${bj.shoeHistory.length} cards seen)`);
 });
 
 /* ── Reset count ── */
 document.getElementById('bj-reset-count').addEventListener('click',()=>{
   bj.runningCount=0;bj.cardsSeenTotal=0;
+  bj.shoeHistory=[];bj.burnCards=[];
   bj.playerCards=[];bj.dealerCards=[];
-  renderBJHand('player');renderBJHand('dealer');
+  renderBJHand('player');renderBJHand('dealer');renderBJBurnCards();
   updateBJPickers();updateBJCount();
   document.getElementById('bj-advice-wrap').innerHTML='';
   showToast('♻️ Count reset — new shoe');
@@ -1955,6 +2041,7 @@ document.getElementById('shoe-track').querySelectorAll('.shoe-deck').forEach(btn
     bj.shoeDecks=parseInt(btn.dataset.deck);
     document.getElementById('shoe-display').textContent=bj.shoeDecks;
     updateBJCount();
+    updateBJPickers();
     showToast(`👟 Shoe: ${bj.shoeDecks} deck${bj.shoeDecks>1?'s':''}`);
   });
 });
@@ -1963,8 +2050,9 @@ document.getElementById('shoe-track').querySelectorAll('.shoe-deck').forEach(btn
 async function bjScanCamera(which){
   bj.activeScanTarget=which;
   const panel=document.getElementById('bj-cam-panel');
-  const label=document.getElementById('bj-cam-label');
-  label.textContent=`📷 Scan ${which==='player'?'Your':'Dealer'} Cards`;
+  const labelEl=document.getElementById('bj-cam-label');
+  const scanLabel={player:'Your Cards',dealer:'Dealer Card',burn:'Burn Card'};
+  labelEl.textContent=`📷 Scan ${scanLabel[which]||'Cards'}`;
   // Stop any running stream first
   if(bj.bjStream){bj.bjStream.getTracks().forEach(t=>t.stop());bj.bjStream=null;}
   // Clear old image + canvas
@@ -2021,8 +2109,17 @@ document.getElementById('bj-cam-freeze').addEventListener('click',async()=>{
     document.getElementById('bj-media-card').classList.remove('scanning');
     if(sel.length){
       const detected=drawBoxes(ctx,sel,boxes,scores,classIds,nw,nh,true,true);
-      detected.forEach(lbl=>bjAddCard(bj.activeScanTarget,lbl));
-      showToast(`📸 Found: ${detected.join(', ')}`);
+      const skipped=[];
+      detected.forEach(lbl=>{
+        if(bjCopiesRemaining(lbl)<=0){
+          skipped.push(lbl);
+          return;
+        }
+        if(bj.activeScanTarget==='burn') bjAddBurn(lbl);
+        else bjAddCard(bj.activeScanTarget,lbl);
+      });
+      if(skipped.length) showToast(`⚠️ Shoe exhausted, skipped: ${skipped.join(', ')}`);
+      else showToast(`📸 Found: ${detected.join(', ')}`);
     }else{showToast('No cards detected — try manually');}
   };
   document.getElementById('bj-cam-start').style.display='inline-flex';
@@ -2042,7 +2139,7 @@ document.getElementById('bj-cam-close').addEventListener('click',()=>{
 /* ── Remove card from BJ hand ── */
 function bjRemoveCard(which, label){
   const arr=which==='player'?bj.playerCards:bj.dealerCards;
-  const idx=arr.indexOf(label);
+  const idx=arr.lastIndexOf(label); // remove the most recently added copy
   if(idx===-1)return;
   bj.runningCount-=hiLoValue(getRank(label));
   bj.cardsSeenTotal--;
@@ -2059,6 +2156,11 @@ buildCardPicker('bj-picker-dealer',
   (label)=>bjAddCard('dealer',label),
   (label)=>bjRemoveCard('dealer',label)
 );
+buildCardPicker('bj-picker-burn',
+  (label)=>bjAddBurn(label),
+  (label)=>bjRemoveBurn(label)
+);
+document.getElementById('bj-cam-burn').addEventListener('click',()=>bjScanCamera('burn'));
 updateBJCount();
 
 /* ════════════════════════════════════════════════════════════════════
@@ -2222,7 +2324,7 @@ function countOuts(holeCards,communityCards){
 
 /* ── Poker advice ── */
 function pokerAdvice(holeCards, communityCards, equity, outs){
-  const stage=pk.stage;
+  const stage=getPokerStage();
   const currentHand=bestHand([...holeCards,...communityCards]).name;
 
   if(stage==='preflop'){
@@ -2277,8 +2379,9 @@ function pokerAdvice(holeCards, communityCards, equity, outs){
 
 /* ── Render poker analysis ── */
 function renderPokerAnalysis(){
-  const {holeCards,communityCards,stage}=pk;
+  const {holeCards,communityCards}=pk;
   if(holeCards.length<2){showToast('Need 2 hole cards!');return;}
+  const stage=getPokerStage(); // auto from community card count
   const wrap=document.getElementById('pk-advice-wrap');
   wrap.innerHTML='<div class="glass-card" style="text-align:center;color:var(--text-muted);padding:20px">⚙️ Calculating…</div>';
   // Run async so UI updates
@@ -2367,6 +2470,7 @@ function renderPKCards(which){
 function updatePKCounts(){
   document.getElementById('pk-hole-count').textContent=`${pk.holeCards.length}/2`;
   document.getElementById('pk-community-count').textContent=`${pk.communityCards.length}/5`;
+  updatePokerStageBadge();
 }
 
 function pkUsedCards(){
@@ -2415,36 +2519,28 @@ buildCardPicker('pk-picker-burn',
 );
 
 /* ── Stage management ── */
-function setPokerStage(stage){
-  pk.stage=stage;
-  POKER_STAGES.forEach(s=>{
-    const el=document.getElementById('ps-'+s);
-    el.classList.remove('active','done');
-    const si=POKER_STAGES.indexOf(s);
-    const ci=POKER_STAGES.indexOf(stage);
-    if(si<ci)el.classList.add('done');
-    else if(si===ci)el.classList.add('active');
-  });
+/* ── Derive poker stage from community card count ── */
+function getPokerStage(){
+  const n=pk.communityCards.length;
+  if(n===0) return 'preflop';
+  if(n<=3)  return 'flop';
+  if(n===4) return 'turn';
+  return 'river';
 }
 
-document.querySelectorAll('.poker-stage').forEach(btn=>{
-  btn.addEventListener('click',()=>setPokerStage(btn.dataset.stage));
-});
-
-document.getElementById('pk-add-street').addEventListener('click',()=>{
-  const next={preflop:'flop',flop:'turn',turn:'river',river:'river'};
-  const ns=next[pk.stage];
-  if(ns===pk.stage){showToast('Already at the River!');return;}
-  setPokerStage(ns);
-  showToast(`♣ ${ns.charAt(0).toUpperCase()+ns.slice(1)}!`);
-});
+function updatePokerStageBadge(){
+  const labels={preflop:'Pre-Flop',flop:'Flop',turn:'Turn',river:'River'};
+  const stage=getPokerStage();
+  const badge=document.getElementById('pk-stage-badge');
+  if(badge) badge.textContent=labels[stage];
+}
 
 document.getElementById('pk-calculate').addEventListener('click',renderPokerAnalysis);
 document.getElementById('pk-reset').addEventListener('click',()=>{
   pk.holeCards=[];pk.communityCards=[];pk.burnCards=[];
   pk.stage='preflop';
   renderPKCards('hole');renderPKCards('community');renderPKCards('burn');
-  updatePKPickers();setPokerStage('preflop');
+  updatePKPickers();updatePokerStageBadge();
   document.getElementById('pk-advice-wrap').innerHTML='';
   showToast('🔄 New hand!');
 });
