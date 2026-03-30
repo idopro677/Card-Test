@@ -439,24 +439,25 @@ canvas{
   background:rgba(0,0,0,0.35);transition:all .15s;
   color:var(--text-light);
 }
-.pick-card:hover:not(.selected){border-color:var(--gold);background:rgba(201,168,76,0.12);transform:scale(1.06)}
-/* .selected = card already in play — click again to remove */
+.pick-card:hover:not(.selected):not(.unavailable){border-color:var(--gold);background:rgba(201,168,76,0.12);transform:scale(1.06)}
+/* .selected = card is in your hand — shows count badge, still clickable to add more */
 .pick-card.selected{
-  background:rgba(192,57,43,0.22);
-  border-color:rgba(192,57,43,0.6);
-  box-shadow:inset 0 0 0 1px rgba(192,57,43,0.3);
+  background:rgba(201,168,76,0.18);
+  border-color:var(--gold);
+  box-shadow:inset 0 0 0 1px rgba(201,168,76,0.4);
   position:relative;
 }
-.pick-card.selected::after{
-  content:'✕';
-  position:absolute;top:-5px;right:-5px;
-  width:14px;height:14px;border-radius:50%;
-  background:var(--red-bright);color:#fff;
-  font-size:8px;line-height:14px;text-align:center;
-  box-shadow:0 1px 4px rgba(0,0,0,0.4);
+/* count badge — shown via JS setting data-own-count attribute */
+.pick-card.selected[data-own-count]:not([data-own-count=''])::after{
+  content:attr(data-own-count);
+  position:absolute;top:-6px;right:-6px;
+  min-width:15px;height:15px;border-radius:50%;
+  background:var(--gold);color:#1a1a1a;
+  font-size:9px;font-weight:900;line-height:15px;text-align:center;
+  box-shadow:0 1px 4px rgba(0,0,0,0.4);padding:0 2px;
 }
-.pick-card.selected:hover{background:rgba(192,57,43,0.38);transform:scale(1.05)}
-/* unavailable = used in other hand (not current picker's target) — greyed, truly unclickable */
+.pick-card.selected:hover{background:rgba(201,168,76,0.28);transform:scale(1.05)}
+/* unavailable = shoe exhausted — truly blocked */
 .pick-card.unavailable{opacity:0.18;cursor:not-allowed;pointer-events:none}
 .pick-card.suit-S{color:#8888ee}.pick-card.suit-H{color:#e07070}.pick-card.suit-D{color:#6699ee}.pick-card.suit-T{color:#70d070}
 
@@ -918,9 +919,6 @@ canvas{
       </div>
     </div>
 
-    <!-- Advice -->
-    <div id="bj-advice-wrap"></div>
-
     <!-- Burn cards -->
     <div class="glass-card">
       <h3>🔥 Burned Cards (affect count &amp; availability)</h3>
@@ -930,6 +928,9 @@ canvas{
         <button class="btn btn-cam" style="padding:8px 14px;font-size:12px" id="bj-cam-burn">📷 Scan Burn</button>
       </div>
     </div>
+
+    <!-- Advice (below burn cards) -->
+    <div id="bj-advice-wrap"></div>
 
     <!-- Options row -->
     <div class="bj-options-row">
@@ -1818,9 +1819,9 @@ function buildCardPicker(containerId, onPick, onRemove){
       btn.textContent=`${info.emoji}${rank}`;
       btn.dataset.label=label;
       btn.addEventListener('click',()=>{
-        if(btn.classList.contains('selected')){
-          if(onRemove) onRemove(label);
-        } else if(!btn.classList.contains('unavailable')){
+        // Always try to add — never remove from picker click.
+        // Removal is done via the chips displayed above.
+        if(!btn.classList.contains('unavailable')){
           onPick(label);
         }
       });
@@ -1880,23 +1881,24 @@ function updateBJPickerState(pickerId, ownCards, otherCards){
   document.querySelectorAll(`#${pickerId} .pick-card`).forEach(btn=>{
     const lbl=btn.dataset.label;
     btn.classList.remove('selected','unavailable');
+    btn.dataset.ownCount='';
+    btn.title='';
 
-    // Count how many of this card are in ownCards (may be >1 with multi-deck)
-    const ownCount = ownCards.filter(c=>c===lbl).length;
-    if(ownCount > 0){
+    const ownCount=ownCards.filter(c=>c===lbl).length;
+    const remaining=bjCopiesRemaining(lbl);
+
+    if(ownCount>0){
       btn.classList.add('selected');
-      // Show count badge if more than one
-      btn.dataset.ownCount = ownCount > 1 ? `×${ownCount}` : '';
+      // Show count badge only if more than one in hand
+      btn.dataset.ownCount=ownCount>1?`×${ownCount}`:'';
+    }
+
+    if(remaining<=0){
+      // All copies exhausted — block the button
+      btn.classList.add('unavailable');
+      btn.title='None left in shoe';
     } else {
-      btn.dataset.ownCount = '';
-      // Check if exhausted from shoe (history + burn + both hands)
-      const remaining = bjCopiesRemaining(lbl);
-      if(remaining <= 0){
-        btn.classList.add('unavailable');
-        btn.title = 'None left in shoe';
-      } else {
-        btn.title = `${remaining} of ${bj.shoeDecks} left`;
-      }
+      btn.title=`${remaining} of ${bj.shoeDecks} left in shoe`;
     }
   });
 }
